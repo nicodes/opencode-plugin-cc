@@ -73,3 +73,15 @@ test("runOpenCode executes the selected agent and resumes its session", async ()
   assert.equal(invocations[1].agent, "coder-custom");
   assert.ok(invocations[1].argv.includes("--session"));
 });
+
+test("runOpenCode classifies provider authentication failures", async () => {
+  const bin = makeTempDir();
+  const pluginData = makeTempDir();
+  const work = makeTempDir();
+  const fake = installFakeOpenCode(bin);
+  const env = fakeEnvironment(fake.binary, pluginData, { FAKE_OPENCODE_BEHAVIOR: "auth-error" });
+  const result = await runOpenCode(work, { prompt: "task", agent: "coder-custom", env });
+  assert.equal(result.status, 1);
+  assert.equal(result.classification.kind, "auth");
+  assert.match(result.classification.detail, /authentication problem/);
+});

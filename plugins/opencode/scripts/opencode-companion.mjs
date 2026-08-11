@@ -20,7 +20,7 @@ import {
   runOpenCode,
   validateRoleAssignments
 } from "./lib/opencode.mjs";
-import { terminateProcessTree } from "./lib/process.mjs";
+import { getProcessIdentity, terminateProcessTree } from "./lib/process.mjs";
 import {
   appendJobLog,
   generateJobId,
@@ -33,6 +33,7 @@ import {
   writeJob
 } from "./lib/state.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+import { removeReviewTemporaryDirectory } from "./lib/temporary.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
@@ -216,9 +217,30 @@ function progressReporter(cwd, jobId, foreground) {
       patch.openCodeSessionId = event.sessionId;
     }
     if (Object.keys(patch).length > 0) {
-      updateJob(cwd, jobId, patch);
+      const job = readJob(cwd, jobId);
+      if (job && ACTIVE_STATUSES.has(job.status)) {
+        updateJob(cwd, jobId, patch);
+      }
     }
   };
+}
+
+function reconcileStaleJobs(cwd) {
+  for (const job of listJobs(cwd).filter((candidate) => candidate.background && ACTIVE_STATUSES.has(candidate.status))) {
+    if (!job.pid || !job.processIdentity || getProcessIdentity(job.pid) !== job.processIdentity) {
+      removeReviewTemporaryDirectory(job.temporaryDirectory);
+      updateJob(cwd, job.id, {
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        processIdentity: null,
+        temporaryDirectory: null,
+        completedAt: now(),
+        errorMessage: "The background worker exited without recording a result.",
+        request: undefined
+      });
+    }
+  }
 }
 
 function renderExecution(role, result, changed) {
@@ -256,6 +278,7 @@ async function executeRequest(cwd, jobId, request, foreground) {
     fs.chmodSync(temporaryDirectory, 0o700);
     const contextFile = path.join(temporaryDirectory, "review-context.md");
     fs.writeFileSync(contextFile, context, { encoding: "utf8", mode: 0o600 });
+    updateJob(cwd, jobId, { temporaryDirectory });
     files = [contextFile];
     prompt = [
       `Review the attached Git changes for ${target.label}.`,
@@ -264,19 +287,24 @@ async function executeRequest(cwd, jobId, request, foreground) {
     ].join("\n")
   }
 
-  const result = await runOpenCode(resolveWorkspaceRoot(cwd), {
-    prompt,
-    agent,
-    sessionId: resumeSessionId,
-    model: request.model,
-    variant: request.variant,
-    files,
-    pure: readOnly,
-    onProgress: progressReporter(cwd, jobId, foreground)
-  });
-
-  if (temporaryDirectory) {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  let result;
+  try {
+    result = await runOpenCode(resolveWorkspaceRoot(cwd), {
+      prompt,
+      agent,
+      sessionId: resumeSessionId,
+      model: request.model,
+      variant: request.variant,
+      files,
+      pure: readOnly,
+      onProgress: progressReporter(cwd, jobId, foreground)
+    });
+  } finally {
+    removeReviewTemporaryDirectory(temporaryDirectory);
+    const job = readJob(cwd, jobId);
+    if (job && ACTIVE_STATUSES.has(job.status)) {
+      updateJob(cwd, jobId, { temporaryDirectory: null });
+    }
   }
   const after = readOnly ? fingerprint(cwd) : null;
   const changed = Boolean(before && after && before !== after);
@@ -301,7 +329,7 @@ async function executeRequest(cwd, jobId, request, foreground) {
   };
 }
 
-function createJob(cwd, request) {
+function createJob(cwd, request, background) {
   const timestamp = now();
   const id = generateJobId(request.role);
   const job = {
@@ -312,6 +340,7 @@ function createJob(cwd, request) {
     phase: "queued",
     summary: shorten(request.prompt || `${request.role} request`),
     workspaceRoot: resolveWorkspaceRoot(cwd),
+    background,
     claudeSessionId: sessionId(),
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -325,14 +354,25 @@ function createJob(cwd, request) {
 }
 
 async function runTracked(cwd, job, foreground) {
-  updateJob(cwd, job.id, { status: "running", phase: "starting", pid: process.pid, startedAt: now() });
+  updateJob(cwd, job.id, {
+    status: "running",
+    phase: "starting",
+    pid: foreground ? null : process.pid,
+    processIdentity: foreground ? null : getProcessIdentity(process.pid),
+    startedAt: now()
+  });
   try {
     const execution = await executeRequest(cwd, job.id, job.request, foreground);
+    const current = readJob(cwd, job.id);
+    if (current?.status === "cancelled") {
+      return execution;
+    }
     const status = execution.status === 0 ? "completed" : "failed";
     updateJob(cwd, job.id, {
       status,
       phase: status === "completed" ? "done" : "failed",
       pid: null,
+      processIdentity: null,
       completedAt: now(),
       summary: execution.summary,
       openCodeSessionId: execution.openCodeSessionId,
@@ -344,7 +384,10 @@ async function runTracked(cwd, job, foreground) {
     return execution;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    updateJob(cwd, job.id, { status: "failed", phase: "failed", pid: null, completedAt: now(), errorMessage: message, request: undefined });
+    const current = readJob(cwd, job.id);
+    if (current?.status !== "cancelled") {
+      updateJob(cwd, job.id, { status: "failed", phase: "failed", pid: null, processIdentity: null, completedAt: now(), errorMessage: message, request: undefined });
+    }
     appendJobLog(cwd, job.id, `Failed: ${message}`);
     throw error;
   }
@@ -360,12 +403,18 @@ function spawnWorker(cwd, jobId) {
     windowsHide: true
   });
   child.unref();
-  updateJob(cwd, jobId, { pid: child.pid ?? null });
+  const current = readJob(cwd, jobId);
+  if (current && ACTIVE_STATUSES.has(current.status)) {
+    updateJob(cwd, jobId, {
+      pid: child.pid ?? null,
+      processIdentity: child.pid ? getProcessIdentity(child.pid) : null
+    });
+  }
 }
 
 async function launch(cwd, request, background, json) {
   configuredAgent(cwd, request.role);
-  const job = createJob(cwd, request);
+  const job = createJob(cwd, request, background);
   if (background) {
     spawnWorker(cwd, job.id);
     const payload = { jobId: job.id, status: "queued", role: job.role, summary: job.summary };
@@ -472,12 +521,17 @@ async function handleStatus(argv) {
     booleanOptions: ["wait", "all", "json"]
   });
   const cwd = cwdFrom(options);
+  reconcileStaleJobs(cwd);
   const reference = positionals[0] ?? null;
   if (options.wait && !reference) {
     throw new Error("status --wait requires a job id.");
   }
   if (reference && options.wait) {
-    const deadline = Date.now() + Math.max(0, Number(options["timeout-ms"] ?? 240000));
+    const timeout = Number(options["timeout-ms"] ?? 240000);
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new Error("--timeout-ms must be a finite non-negative number.");
+    }
+    const deadline = Date.now() + timeout;
     while (true) {
       const job = selectJob(cwd, reference);
       if (!job) {
@@ -502,6 +556,7 @@ async function handleStatus(argv) {
 function handleResult(argv) {
   const { options, positionals } = commandInput(argv, { valueOptions: ["cwd"], booleanOptions: ["json"] });
   const cwd = cwdFrom(options);
+  reconcileStaleJobs(cwd);
   const job = selectJob(cwd, positionals[0] ?? null, (candidate) => !ACTIVE_STATUSES.has(candidate.status));
   if (!job) {
     throw new Error("No finished OpenCode job was found.");
@@ -512,11 +567,12 @@ function handleResult(argv) {
 function handleCancel(argv) {
   const { options, positionals } = commandInput(argv, { valueOptions: ["cwd"], booleanOptions: ["json"] });
   const cwd = cwdFrom(options);
-  const active = listJobs(cwd).filter((job) => ACTIVE_STATUSES.has(job.status));
+  reconcileStaleJobs(cwd);
+  const active = listJobs(cwd).filter((job) => job.background && ACTIVE_STATUSES.has(job.status));
   const reference = positionals[0] ?? null;
   let job;
   if (reference) {
-    job = selectJob(cwd, reference, (candidate) => ACTIVE_STATUSES.has(candidate.status));
+    job = selectJob(cwd, reference, (candidate) => candidate.background && ACTIVE_STATUSES.has(candidate.status));
   } else {
     const scoped = active.filter((candidate) => !sessionId() || candidate.claudeSessionId === sessionId());
     if (scoped.length > 1) {
@@ -527,8 +583,9 @@ function handleCancel(argv) {
   if (!job) {
     throw new Error("No active OpenCode job was found.");
   }
-  terminateProcessTree(job.pid);
-  const next = updateJob(cwd, job.id, { status: "cancelled", phase: "cancelled", pid: null, completedAt: now(), errorMessage: "Cancelled by user.", request: undefined });
+  terminateProcessTree(job.pid, job.processIdentity);
+  removeReviewTemporaryDirectory(job.temporaryDirectory);
+  const next = updateJob(cwd, job.id, { status: "cancelled", phase: "cancelled", pid: null, processIdentity: null, temporaryDirectory: null, completedAt: now(), errorMessage: "Cancelled by user.", request: undefined });
   appendJobLog(cwd, job.id, "Cancelled by user.");
   output(next, `Cancelled ${job.id}.`, options.json);
 }

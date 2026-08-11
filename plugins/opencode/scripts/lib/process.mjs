@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import process from "node:process";
 
 export function runCommand(command, args, options = {}) {
@@ -39,9 +40,45 @@ export function binaryAvailable(command, args = ["--version"], options = {}) {
   return { available: result.status === 0, detail };
 }
 
-export function terminateProcessTree(pid) {
+export function getProcessIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  if (process.platform === "linux") {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+      return fields[19] ? `linux:${fields[19]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "win32") {
+    const result = runCommand("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
+    ]);
+    return result.status === 0 && result.stdout.trim() ? `windows:${result.stdout.trim()}` : null;
+  }
+  const result = runCommand("ps", ["-p", String(pid), "-o", "lstart="]);
+  return result.status === 0 && result.stdout.trim() ? `unix:${result.stdout.trim()}` : null;
+}
+
+export function terminateProcessTree(pid, expectedIdentity) {
   if (!Number.isInteger(pid) || pid <= 0) {
     throw new Error("The job does not have a valid process id.");
+  }
+  if (!expectedIdentity) {
+    throw new Error("The job does not have a verifiable process identity.");
+  }
+  const actualIdentity = getProcessIdentity(pid);
+  if (!actualIdentity) {
+    throw new Error("The job process is no longer running.");
+  }
+  if (actualIdentity !== expectedIdentity) {
+    throw new Error("The stored job process id now belongs to a different process; refusing to terminate it.");
   }
   if (process.platform === "win32") {
     const result = runCommand("taskkill", ["/PID", String(pid), "/T", "/F"]);

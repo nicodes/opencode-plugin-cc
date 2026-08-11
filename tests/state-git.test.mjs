@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { captureRepositoryFingerprint, resolveReviewTarget } from "../plugins/opencode/scripts/lib/git.mjs";
+import { getProcessIdentity, terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
 import { getConfig, listJobs, saveConfig, writeJob } from "../plugins/opencode/scripts/lib/state.mjs";
 import { initializeRepository, makeTempDir } from "./helpers.mjs";
 
@@ -33,4 +34,19 @@ test("auto review target prefers a dirty working tree", () => {
   initializeRepository(workspace);
   fs.writeFileSync(path.join(workspace, "new.txt"), "new\n");
   assert.equal(resolveReviewTarget(workspace, { scope: "auto" }).mode, "working-tree");
+});
+
+test("process termination refuses a mismatched process identity", () => {
+  assert.ok(getProcessIdentity(process.pid));
+  assert.throws(() => terminateProcessTree(process.pid, "not-this-process"), /different process/);
+});
+
+test("repository fingerprint samples large untracked files", () => {
+  const workspace = makeTempDir();
+  initializeRepository(workspace);
+  const file = path.join(workspace, "large.bin");
+  fs.writeFileSync(file, Buffer.alloc(2 * 1024 * 1024, 1));
+  const before = captureRepositoryFingerprint(workspace);
+  fs.appendFileSync(file, Buffer.from([2]));
+  assert.notEqual(captureRepositoryFingerprint(workspace), before);
 });

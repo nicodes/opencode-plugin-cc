@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { listJobs } from "../plugins/opencode/scripts/lib/state.mjs";
+import { listJobs, writeJob } from "../plugins/opencode/scripts/lib/state.mjs";
 import { fakeEnvironment, installFakeOpenCode, readFakeState } from "./fake-opencode-fixture.mjs";
 import { initializeRepository, makeTempDir, runNode } from "./helpers.mjs";
 
 const companion = path.resolve("plugins/opencode/scripts/opencode-companion.mjs");
+const lifecycleHook = path.resolve("plugins/opencode/scripts/session-lifecycle-hook.mjs");
 
 function fixture(extraEnv = {}) {
   const bin = makeTempDir();
@@ -100,6 +101,18 @@ test("reviewer receives collected Git context as an attachment", () => {
   assert.equal(fs.existsSync(invocation.files[0]), false);
 });
 
+test("reviewer removes its sensitive context after an OpenCode error", () => {
+  const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "auth-error" });
+  initializeRepository(current.work);
+  fs.writeFileSync(path.join(current.work, "app.js"), "export const value = 2;\n");
+  configure(current);
+  const result = runNode(companion, ["review", "--scope", "working-tree"], { cwd: current.work, env: current.env });
+  assert.notEqual(result.status, 0);
+  const invocation = readFakeState(current.fake.stateFile).invocations[0];
+  assert.equal(fs.existsSync(invocation.files[0]), false);
+  assert.equal(listJobs(current.work, current.env)[0].temporaryDirectory, null);
+});
+
 test("background jobs can be waited on and retrieved", () => {
   const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "slow" });
   configure(current);
@@ -131,5 +144,50 @@ test("active background jobs can be cancelled", () => {
   const cancelled = runNode(companion, ["cancel", id], { cwd: current.work, env: current.env });
   assert.equal(cancelled.status, 0, cancelled.stderr);
   assert.match(cancelled.stdout, /Cancelled/);
+  assert.equal(listJobs(current.work, current.env)[0].status, "cancelled");
+});
+
+test("status rejects a non-numeric wait timeout", () => {
+  const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "slow" });
+  configure(current);
+  const launched = runNode(companion, ["task", "--role", "coder", "--background", "long", "task"], { cwd: current.work, env: current.env });
+  const id = launched.stdout.match(/coder-[a-z0-9-]+/i)?.[0];
+  const status = runNode(companion, ["status", id, "--wait", "--timeout-ms", "invalid"], { cwd: current.work, env: current.env });
+  assert.notEqual(status.status, 0);
+  assert.match(status.stderr, /finite non-negative number/);
+  runNode(companion, ["cancel", id], { cwd: current.work, env: current.env });
+});
+
+test("status reconciles a stale worker without signalling the recycled pid", () => {
+  const current = fixture();
+  writeJob(current.work, {
+    id: "coder-stale",
+    role: "coder",
+    background: true,
+    status: "running",
+    phase: "running",
+    pid: process.pid,
+    processIdentity: "not-this-process",
+    claudeSessionId: "claude-test-session",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }, current.env);
+  const status = runNode(companion, ["status", "coder-stale", "--json"], { cwd: current.work, env: current.env });
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).jobs[0].status, "failed");
+});
+
+test("session end cancels only its verified background workers", () => {
+  const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "slow" });
+  configure(current);
+  const launched = runNode(companion, ["task", "--role", "coder", "--background", "long", "task"], { cwd: current.work, env: current.env });
+  const id = launched.stdout.match(/coder-[a-z0-9-]+/i)?.[0];
+  assert.ok(id);
+  const ended = runNode(lifecycleHook, ["SessionEnd"], {
+    cwd: current.work,
+    env: current.env,
+    input: JSON.stringify({ cwd: current.work, session_id: "claude-test-session" })
+  });
+  assert.equal(ended.status, 0, ended.stderr);
   assert.equal(listJobs(current.work, current.env)[0].status, "cancelled");
 });
