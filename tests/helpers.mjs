@@ -18,6 +18,7 @@ export function runNode(script, args, options = {}) {
     cwd: options.cwd,
     env: options.env,
     encoding: "utf8",
+    input: options.input,
     timeout: options.timeout ?? 15000,
     maxBuffer: 16 * 1024 * 1024
   });

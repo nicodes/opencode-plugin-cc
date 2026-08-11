@@ -6,6 +6,9 @@ import { runCommand, runCommandChecked } from "./process.mjs";
 
 const GIT_BUFFER = 64 * 1024 * 1024;
 const MAX_UNTRACKED_FILE_BYTES = 1024 * 1024;
+const MAX_UNTRACKED_CONTEXT_FILES = 100;
+const MAX_UNTRACKED_CONTEXT_BYTES = 8 * 1024 * 1024;
+const FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
 
 function git(cwd, args, options = {}) {
   return runCommand("git", args, { cwd, maxBuffer: GIT_BUFFER, ...options });
@@ -75,7 +78,9 @@ function section(title, body) {
 }
 
 function untrackedContent(root, files) {
-  return files.map((file) => {
+  let includedBytes = 0;
+  const selected = files.slice(0, MAX_UNTRACKED_CONTEXT_FILES);
+  const content = selected.map((file) => {
     const absolute = path.join(root, file);
     try {
       const stat = fs.statSync(absolute);
@@ -85,7 +90,11 @@ function untrackedContent(root, files) {
       if (stat.size > MAX_UNTRACKED_FILE_BYTES) {
         return `### ${file}\n(skipped: ${stat.size} bytes)`;
       }
+      if (includedBytes + stat.size > MAX_UNTRACKED_CONTEXT_BYTES) {
+        return `### ${file}\n(skipped: total untracked context limit reached)`;
+      }
       const buffer = fs.readFileSync(absolute);
+      includedBytes += buffer.length;
       if (buffer.includes(0)) {
         return `### ${file}\n(skipped: binary file)`;
       }
@@ -93,7 +102,34 @@ function untrackedContent(root, files) {
     } catch {
       return `### ${file}\n(skipped: unreadable)`;
     }
-  }).join("\n\n");
+  });
+  if (files.length > selected.length) {
+    content.push(`(${files.length - selected.length} additional untracked files omitted)`);
+  }
+  return content.join("\n\n");
+}
+
+function hashFileSample(hash, file) {
+  const stat = fs.statSync(file);
+  hash.update(`${stat.size}:${stat.mtimeMs}`);
+  if (!stat.isFile()) {
+    return;
+  }
+  if (stat.size <= FINGERPRINT_SAMPLE_BYTES * 2) {
+    hash.update(fs.readFileSync(file));
+    return;
+  }
+  const descriptor = fs.openSync(file, "r");
+  try {
+    const first = Buffer.allocUnsafe(FINGERPRINT_SAMPLE_BYTES);
+    const last = Buffer.allocUnsafe(FINGERPRINT_SAMPLE_BYTES);
+    fs.readSync(descriptor, first, 0, first.length, 0);
+    fs.readSync(descriptor, last, 0, last.length, stat.size - last.length);
+    hash.update(first);
+    hash.update(last);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 export function collectReviewContext(target) {
@@ -132,7 +168,7 @@ export function captureRepositoryFingerprint(cwd) {
   for (const file of lines(gitChecked(root, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout.replace(/\0/g, "\n"))) {
     hash.update(file);
     try {
-      hash.update(fs.readFileSync(path.join(root, file)));
+      hashFileSample(hash, path.join(root, file));
     } catch {
       hash.update("<unreadable>");
     }

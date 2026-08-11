@@ -5,6 +5,7 @@ import process from "node:process";
 
 import { terminateProcessTree } from "./lib/process.mjs";
 import { listJobs, updateJob } from "./lib/state.mjs";
+import { removeReviewTemporaryDirectory } from "./lib/temporary.mjs";
 
 const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
 
@@ -30,18 +31,24 @@ function endSession(input) {
   if (!sessionId) {
     return;
   }
-  for (const job of listJobs(cwd).filter((candidate) => candidate.claudeSessionId === sessionId && ["queued", "running"].includes(candidate.status))) {
+  for (const job of listJobs(cwd).filter((candidate) => candidate.background && candidate.claudeSessionId === sessionId && ["queued", "running"].includes(candidate.status))) {
+    let errorMessage = "Cancelled when the Claude session ended.";
+    let status = "cancelled";
     try {
-      terminateProcessTree(job.pid);
-    } catch {
-      // Session shutdown must continue even when a process already exited.
+      terminateProcessTree(job.pid, job.processIdentity);
+    } catch (error) {
+      status = "failed";
+      errorMessage = error instanceof Error ? error.message : String(error);
     }
+    removeReviewTemporaryDirectory(job.temporaryDirectory);
     updateJob(cwd, job.id, {
-      status: "cancelled",
-      phase: "cancelled",
+      status,
+      phase: status,
       pid: null,
+      processIdentity: null,
+      temporaryDirectory: null,
       completedAt: new Date().toISOString(),
-      errorMessage: "Cancelled when the Claude session ended.",
+      errorMessage,
       request: undefined
     });
   }
