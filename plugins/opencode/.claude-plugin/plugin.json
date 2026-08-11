@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "opencode",
+  "displayName": "OpenCode Companion",
+  "version": "0.1.0",
+  "description": "Delegate Claude Code tasks to user-configured OpenCode agents.",
+  "author": {
+    "name": "nicodes"
+  },
+  "repository": "https://github.com/nicodes/opencode-plugin-cc",
+  "license": "Apache-2.0",
+  "keywords": ["opencode", "delegation", "code-review"]
+}

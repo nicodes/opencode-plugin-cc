@@ -1,0 +1,21 @@
+{
+  "name": "opencode-plugin-cc",
+  "owner": {
+    "name": "nicodes"
+  },
+  "metadata": {
+    "description": "OpenCode delegation and review skills for Claude Code.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "opencode",
+      "description": "Delegate Claude Code tasks to user-configured OpenCode agents.",
+      "version": "0.1.0",
+      "author": {
+        "name": "nicodes"
+      },
+      "source": "./plugins/opencode"
+    }
+  ]
+}
