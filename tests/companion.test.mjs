@@ -127,7 +127,7 @@ test("background jobs can be waited on and retrieved", () => {
     timeout: 15000
   });
   assert.equal(waited.status, 0, waited.stderr);
-  assert.equal(JSON.parse(waited.stdout).status, "completed");
+  assert.equal(JSON.parse(waited.stdout).jobs[0].status, "completed");
 
   const result = runNode(companion, ["result", id], { cwd: current.work, env: current.env });
   assert.equal(result.status, 0, result.stderr);

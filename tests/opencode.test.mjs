@@ -40,7 +40,7 @@ test("buildOpenCodeArgs selects a configured agent without injecting agent confi
     files: ["/tmp/context.md"]
   }), [
     "--pure", "run", "--format", "json", "--dir", "/work", "--agent", "my-writer",
-    "--session", "ses_1", "--model", "openai/gpt-5", "--variant", "high", "--file", "/tmp/context.md", "do it"
+    "--session", "ses_1", "--model", "openai/gpt-5", "--variant", "high", "--file", "/tmp/context.md", "--", "do it"
   ]);
 });
 

@@ -33,6 +33,15 @@ export function ensureGitRepository(cwd) {
   return result.stdout.trim();
 }
 
+export function isGitRepository(cwd) {
+  const result = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+  return !result.error && result.status === 0 && result.stdout.trim() === "true";
+}
+
+function resolveCommit(cwd, reference) {
+  return gitChecked(cwd, ["rev-parse", "--verify", "--end-of-options", `${reference}^{commit}`]).stdout.trim();
+}
+
 export function detectDefaultBranch(cwd) {
   const symbolic = git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   if (symbolic.status === 0) {
@@ -63,14 +72,19 @@ export function resolveReviewTarget(cwd, options = {}) {
     throw new Error("--scope must be auto, working-tree, or branch.");
   }
   if (options.base) {
-    gitChecked(root, ["rev-parse", "--verify", `${options.base}^{commit}`]);
-    return { root, mode: "branch", base: options.base, label: `branch against ${options.base}` };
+    return {
+      root,
+      mode: "branch",
+      base: options.base,
+      baseCommit: resolveCommit(root, options.base),
+      label: `branch against ${options.base}`
+    };
   }
   if (scope === "working-tree" || (scope === "auto" && workingTreeState(root).dirty)) {
     return { root, mode: "working-tree", base: null, label: "working tree" };
   }
   const base = detectDefaultBranch(root);
-  return { root, mode: "branch", base, label: `branch against ${base}` };
+  return { root, mode: "branch", base, baseCommit: resolveCommit(root, base), label: `branch against ${base}` };
 }
 
 function section(title, body) {
@@ -93,7 +107,16 @@ function untrackedContent(root, files) {
       if (includedBytes + stat.size > MAX_UNTRACKED_CONTEXT_BYTES) {
         return `### ${file}\n(skipped: total untracked context limit reached)`;
       }
-      const buffer = fs.readFileSync(absolute);
+      const descriptor = fs.openSync(absolute, "r");
+      const buffer = Buffer.alloc(stat.size);
+      try {
+        const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+        if (bytesRead !== buffer.length) {
+          return `### ${file}\n(skipped: file changed while reading)`;
+        }
+      } finally {
+        fs.closeSync(descriptor);
+      }
       includedBytes += buffer.length;
       if (buffer.includes(0)) {
         return `### ${file}\n(skipped: binary file)`;
@@ -144,7 +167,7 @@ export function collectReviewContext(target) {
     ].join("\n");
   }
 
-  const mergeBase = gitChecked(target.root, ["merge-base", "HEAD", target.base]).stdout.trim();
+  const mergeBase = gitChecked(target.root, ["merge-base", "HEAD", target.baseCommit]).stdout.trim();
   const range = `${mergeBase}..HEAD`;
   return [
     section("Target", `Current branch changes relative to ${target.base}. Merge base: ${mergeBase}.`),
