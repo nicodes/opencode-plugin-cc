@@ -54,13 +54,20 @@ export function getProcessIdentity(pid) {
     }
   }
   if (process.platform === "win32") {
-    const result = runCommand("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
-    ]);
-    return result.status === 0 && result.stdout.trim() ? `windows:${result.stdout.trim()}` : null;
+    for (const binary of ["powershell.exe", "pwsh.exe", "pwsh"]) {
+      const result = runCommand(binary, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
+      ]);
+      if (result.status === 0 && result.stdout.trim()) {
+        return `windows:${result.stdout.trim()}`;
+      }
+    }
+    const wmic = runCommand("wmic.exe", ["process", "where", `processid=${pid}`, "get", "CreationDate", "/value"]);
+    const creationDate = wmic.stdout.match(/CreationDate=([^\r\n]+)/)?.[1]?.trim();
+    return wmic.status === 0 && creationDate ? `windows-wmic:${creationDate}` : null;
   }
   const result = runCommand("ps", ["-p", String(pid), "-o", "lstart="]);
   return result.status === 0 && result.stdout.trim() ? `unix:${result.stdout.trim()}` : null;
@@ -89,6 +96,18 @@ export function terminateProcessTree(pid, expectedIdentity) {
   }
   try {
     process.kill(-pid, "SIGTERM");
+  } catch (error) {
+    if (error.code !== "ESRCH") {
+      throw error;
+    }
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  const identityAfterGrace = getProcessIdentity(pid);
+  if (identityAfterGrace && identityAfterGrace !== expectedIdentity) {
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
   } catch (error) {
     if (error.code !== "ESRCH") {
       throw error;

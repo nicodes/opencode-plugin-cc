@@ -11,6 +11,7 @@ import { parseArgs } from "./lib/args.mjs";
 import {
   captureRepositoryFingerprint,
   collectReviewContext,
+  isGitRepository,
   resolveReviewTarget
 } from "./lib/git.mjs";
 import {
@@ -193,14 +194,6 @@ function latestRoleSession(cwd, role, excludeId = null) {
   return candidate.openCodeSessionId;
 }
 
-function fingerprint(cwd) {
-  try {
-    return captureRepositoryFingerprint(cwd);
-  } catch {
-    return null;
-  }
-}
-
 function progressReporter(cwd, jobId, foreground) {
   return (event) => {
     if (event.message) {
@@ -227,6 +220,10 @@ function progressReporter(cwd, jobId, foreground) {
 
 function reconcileStaleJobs(cwd) {
   for (const job of listJobs(cwd).filter((candidate) => candidate.background && ACTIVE_STATUSES.has(candidate.status))) {
+    const age = Date.now() - Date.parse(job.createdAt ?? "");
+    if (job.status === "queued" && (!job.pid || !job.processIdentity) && Number.isFinite(age) && age < 10000) {
+      continue;
+    }
     if (!job.pid || !job.processIdentity || getProcessIdentity(job.pid) !== job.processIdentity) {
       removeReviewTemporaryDirectory(job.temporaryDirectory);
       updateJob(cwd, job.id, {
@@ -243,8 +240,11 @@ function reconcileStaleJobs(cwd) {
   }
 }
 
-function renderExecution(role, result, changed) {
+function renderExecution(role, result, changed, verificationError) {
   const parts = [];
+  if (verificationError) {
+    parts.push(`WARNING: The ${role} run completed, but the Git repository could not be verified afterward: ${verificationError}`);
+  }
   if (changed) {
     parts.push(`WARNING: The ${role} run changed the Git repository despite being treated as read-only.`);
   }
@@ -266,7 +266,8 @@ async function executeRequest(cwd, jobId, request, foreground) {
   const agent = configuredAgent(cwd, role);
   const resumeSessionId = request.resume ? latestRoleSession(cwd, role, jobId) : null;
   const readOnly = role === "explorer" || role === "reviewer";
-  const before = readOnly ? fingerprint(cwd) : null;
+  const verifyRepository = readOnly && isGitRepository(cwd);
+  const before = verifyRepository ? captureRepositoryFingerprint(cwd) : null;
   let temporaryDirectory = null;
   let files = [];
   let prompt = request.prompt;
@@ -306,10 +307,18 @@ async function executeRequest(cwd, jobId, request, foreground) {
       updateJob(cwd, jobId, { temporaryDirectory: null });
     }
   }
-  const after = readOnly ? fingerprint(cwd) : null;
+  let after = null;
+  let verificationError = null;
+  if (verifyRepository) {
+    try {
+      after = captureRepositoryFingerprint(cwd);
+    } catch (error) {
+      verificationError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const changed = Boolean(before && after && before !== after);
-  const status = changed ? 1 : result.status;
-  const rendered = renderExecution(role, result, changed);
+  const status = changed || verificationError ? 1 : result.status;
+  const rendered = renderExecution(role, result, changed, verificationError);
   return {
     status,
     rendered,
@@ -321,7 +330,11 @@ async function executeRequest(cwd, jobId, request, foreground) {
       status,
       changedRepository: changed,
       openCodeSessionId: result.sessionId,
-      classification: changed ? { kind: "read-only-violation", detail: `${role} changed the Git repository.` } : result.classification,
+      classification: changed
+        ? { kind: "read-only-violation", detail: `${role} changed the Git repository.` }
+        : verificationError
+          ? { kind: "repository-verification-failed", detail: verificationError }
+          : result.classification,
       output: result.finalMessage,
       stderr: result.stderr,
       toolCallCount: result.toolCallCount
@@ -395,7 +408,9 @@ async function runTracked(cwd, job, foreground) {
 
 function spawnWorker(cwd, jobId) {
   const script = path.join(ROOT_DIR, "scripts", "opencode-companion.mjs");
-  const child = spawn(process.execPath, [script, "worker", "--cwd", cwd, "--job-id", jobId], {
+  const gate = `${resolveJobLog(cwd, jobId)}.gate`;
+  fs.writeFileSync(gate, "", { mode: 0o600 });
+  const child = spawn(process.execPath, [script, "worker", "--cwd", cwd, "--job-id", jobId, "--gate", gate], {
     cwd,
     env: process.env,
     detached: true,
@@ -403,12 +418,16 @@ function spawnWorker(cwd, jobId) {
     windowsHide: true
   });
   child.unref();
-  const current = readJob(cwd, jobId);
-  if (current && ACTIVE_STATUSES.has(current.status)) {
-    updateJob(cwd, jobId, {
-      pid: child.pid ?? null,
-      processIdentity: child.pid ? getProcessIdentity(child.pid) : null
-    });
+  try {
+    const current = readJob(cwd, jobId);
+    if (current && ACTIVE_STATUSES.has(current.status)) {
+      updateJob(cwd, jobId, {
+        pid: child.pid ?? null,
+        processIdentity: child.pid ? getProcessIdentity(child.pid) : null
+      });
+    }
+  } finally {
+    fs.rmSync(gate, { force: true });
   }
 }
 
@@ -469,11 +488,22 @@ async function handleReview(argv) {
 }
 
 async function handleWorker(argv) {
-  const { options } = commandInput(argv, { valueOptions: ["cwd", "job-id"] });
+  const { options } = commandInput(argv, { valueOptions: ["cwd", "job-id", "gate"] });
   if (!options["job-id"]) {
     throw new Error("worker requires --job-id.");
   }
   const cwd = cwdFrom(options);
+  if (options.gate) {
+    const expectedGate = `${resolveJobLog(cwd, options["job-id"])}.gate`;
+    if (path.resolve(options.gate) !== path.resolve(expectedGate)) {
+      throw new Error("Worker received an unexpected start gate path.");
+    }
+    const deadline = Date.now() + 5000;
+    while (fs.existsSync(options.gate) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    fs.rmSync(options.gate, { force: true });
+  }
   const job = readJob(cwd, options["job-id"]);
   if (!job?.request) {
     throw new Error(`Job ${options["job-id"]} has no runnable request.`);
@@ -538,7 +568,7 @@ async function handleStatus(argv) {
         throw new Error(`No job found for "${reference}".`);
       }
       if (!ACTIVE_STATUSES.has(job.status) || Date.now() >= deadline) {
-        output(job, renderStatus([job]), options.json);
+        output({ jobs: [job] }, renderStatus([job]), options.json);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));

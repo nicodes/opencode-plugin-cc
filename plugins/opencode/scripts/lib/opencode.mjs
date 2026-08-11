@@ -180,7 +180,7 @@ export function buildOpenCodeArgs(options) {
   for (const file of options.files ?? []) {
     args.push("--file", file);
   }
-  args.push(options.prompt);
+  args.push("--", options.prompt);
   return args;
 }
 

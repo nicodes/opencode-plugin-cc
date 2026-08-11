@@ -123,7 +123,8 @@ export function appendJobLog(cwd, jobId, message, env = process.env) {
 
 function pruneJobs(cwd, env) {
   const jobs = listJobs(cwd, env);
-  for (const job of jobs.slice(MAX_JOBS)) {
+  const finished = jobs.filter((job) => job.status !== "queued" && job.status !== "running");
+  for (const job of finished.slice(MAX_JOBS)) {
     for (const file of [resolveJobFile(cwd, job.id, env), resolveJobLog(cwd, job.id, env)]) {
       try {
         fs.unlinkSync(file);
