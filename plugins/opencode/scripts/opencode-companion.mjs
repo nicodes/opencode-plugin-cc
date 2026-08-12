@@ -156,6 +156,9 @@ function requestedAgent(cwd, name) {
 
 function latestAgentSession(cwd, agent, kind, readOnly, excludeId = null) {
   const currentSession = sessionId();
+  if (!currentSession) {
+    throw new Error("OpenCode session resume requires Claude session context. Restart Claude Code or start a fresh run.");
+  }
   const candidate = listJobs(cwd).find((job) =>
     job.id !== excludeId &&
     job.agent === agent &&
@@ -163,7 +166,7 @@ function latestAgentSession(cwd, agent, kind, readOnly, excludeId = null) {
     Boolean(job.readOnly) === readOnly &&
     job.openCodeSessionId &&
     !ACTIVE_STATUSES.has(job.status) &&
-    (!currentSession || job.claudeSessionId === currentSession)
+    job.claudeSessionId === currentSession
   );
   if (!candidate) {
     throw new Error(`No completed ${readOnly ? "read-only " : ""}${kind} session for agent "${agent}" is available to resume in this workspace.`);
@@ -567,7 +570,11 @@ function handleResult(argv) {
   const { options, positionals } = commandInput(argv, { valueOptions: ["cwd"], booleanOptions: ["json"] });
   const cwd = cwdFrom(options);
   reconcileStaleJobs(cwd);
-  const job = selectJob(cwd, positionals[0] ?? null, (candidate) => !ACTIVE_STATUSES.has(candidate.status));
+  const reference = positionals[0] ?? null;
+  const currentSession = sessionId();
+  const job = selectJob(cwd, reference, (candidate) =>
+    !ACTIVE_STATUSES.has(candidate.status) && (reference || !currentSession || candidate.claudeSessionId === currentSession)
+  );
   if (!job) {
     throw new Error("No finished OpenCode job was found.");
   }
