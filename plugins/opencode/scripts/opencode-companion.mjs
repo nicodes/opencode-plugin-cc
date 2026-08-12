@@ -104,7 +104,11 @@ function setupReport(cwd) {
     agentError = error instanceof Error ? error.message : String(error);
   }
   const runnableAgents = agents.filter((agent) => agent.runnable);
-  const errors = agentError ? [agentError] : runnableAgents.length === 0 ? ["No primary or all-mode OpenCode agents were found."] : [];
+  const errors = [
+    ...(agentError ? [agentError] : []),
+    ...(!auth.ready ? [auth.detail || "OpenCode authentication could not be inspected."] : []),
+    ...(!agentError && runnableAgents.length === 0 ? ["No primary or all-mode OpenCode agents were found."] : [])
+  ];
   return {
     ready: availability.available && auth.ready && errors.length === 0,
     opencode: availability,
@@ -150,18 +154,19 @@ function requestedAgent(cwd, name) {
   return validateAgentSelection(listOpenCodeAgents(cwd), name).name;
 }
 
-function latestAgentSession(cwd, agent, readOnly, excludeId = null) {
+function latestAgentSession(cwd, agent, kind, readOnly, excludeId = null) {
   const currentSession = sessionId();
   const candidate = listJobs(cwd).find((job) =>
     job.id !== excludeId &&
     job.agent === agent &&
+    job.kind === kind &&
     Boolean(job.readOnly) === readOnly &&
     job.openCodeSessionId &&
     !ACTIVE_STATUSES.has(job.status) &&
     (!currentSession || job.claudeSessionId === currentSession)
   );
   if (!candidate) {
-    throw new Error(`No completed ${readOnly ? "read-only " : ""}session for agent "${agent}" is available to resume in this workspace.`);
+    throw new Error(`No completed ${readOnly ? "read-only " : ""}${kind} session for agent "${agent}" is available to resume in this workspace.`);
   }
   return candidate.openCodeSessionId;
 }
@@ -234,9 +239,9 @@ function renderExecution(label, result, changed, verificationError) {
 }
 
 async function executeRequest(cwd, jobId, request, foreground) {
-  const agent = requestedAgent(cwd, request.agent);
+  const agent = request.agent;
   const readOnly = Boolean(request.readOnly || request.kind === "review");
-  const resumeSessionId = request.resume ? latestAgentSession(cwd, agent, readOnly, jobId) : null;
+  const resumeSessionId = request.resume ? latestAgentSession(cwd, agent, request.kind, readOnly, jobId) : null;
   const verifyRepository = readOnly && isGitRepository(cwd);
   const before = verifyRepository ? captureRepositoryFingerprint(cwd) : null;
   let temporaryDirectory = null;

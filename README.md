@@ -77,7 +77,7 @@ opencode run --format json --dir <workspace> --agent <assigned-name> <prompt>
 
 It parses OpenCode's NDJSON events, records the session ID, and stores bounded workspace-specific job metadata under `CLAUDE_PLUGIN_DATA`. No persistent HTTP server or listening port is created.
 
-`--resume` continues only the latest tracked session for the same agent name, read-only mode, workspace, and Claude session. A read-only run never resumes a write-capable session, even when both use the same agent.
+`--resume` continues only the latest tracked session for the same agent name, command kind, read-only mode, workspace, and Claude session. A read-only run never resumes a write-capable or review session, even when they use the same agent.
 
 Reviews collect staged, unstaged, untracked, or branch-diff context with direct Git process arguments and attach it through `opencode run --file`. The plugin does not replace your reviewer's prompt or output format.
 

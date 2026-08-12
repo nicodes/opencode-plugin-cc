@@ -25,4 +25,6 @@ Preserve `--read-only`, `--background`, `--resume`, `--fresh`, `--model`, `--var
 
 `--read-only` disables external OpenCode plugins and verifies that the Git repository did not change. Without it, normal OpenCode configuration and plugins apply.
 
+Add `--read-only` by default for research, investigation, explanation, planning, and diagnosis requests where no repository changes are requested. Do not add it for implementation, repair, generation, formatting, or other tasks expected to modify files.
+
 Return delegation stdout verbatim. Do not inspect files, summarize, monitor, or perform follow-up work.
