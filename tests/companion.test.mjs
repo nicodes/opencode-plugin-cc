@@ -159,6 +159,17 @@ test("result without an id stays within the current Claude session", () => {
   assert.match(result.stdout, /Completed by coder-custom/);
 });
 
+test("result without an id requires Claude session context", () => {
+  const current = fixture();
+  const first = runNode(companion, ["run", "--agent", "coder-custom", "task"], { cwd: current.work, env: current.env });
+  assert.equal(first.status, 0, first.stderr);
+  const env = { ...current.env };
+  delete env.OPENCODE_COMPANION_SESSION_ID;
+  const result = runNode(companion, ["result"], { cwd: current.work, env });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Pass an explicit job id/);
+});
+
 test("background jobs can be waited on and retrieved", () => {
   const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "slow" });
   const id = backgroundRun(current);
