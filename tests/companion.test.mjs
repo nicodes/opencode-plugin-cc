@@ -136,6 +136,29 @@ test("resume ignores sessions created by a different Claude session", () => {
   assert.match(resumed.stderr, /No completed run session/);
 });
 
+test("resume requires Claude session context", () => {
+  const current = fixture();
+  const first = runNode(companion, ["run", "--agent", "coder-custom", "task"], { cwd: current.work, env: current.env });
+  assert.equal(first.status, 0, first.stderr);
+  const env = { ...current.env };
+  delete env.OPENCODE_COMPANION_SESSION_ID;
+  const resumed = runNode(companion, ["run", "--agent", "coder-custom", "--resume", "continue"], { cwd: current.work, env });
+  assert.notEqual(resumed.status, 0);
+  assert.match(resumed.stderr, /requires Claude session context/);
+});
+
+test("result without an id stays within the current Claude session", () => {
+  const current = fixture();
+  const first = runNode(companion, ["run", "--agent", "coder-custom", "session one"], { cwd: current.work, env: current.env });
+  assert.equal(first.status, 0, first.stderr);
+  const otherEnv = { ...current.env, OPENCODE_COMPANION_SESSION_ID: "another-claude-session" };
+  const second = runNode(companion, ["run", "--agent", "explorer-custom", "session two"], { cwd: current.work, env: otherEnv });
+  assert.equal(second.status, 0, second.stderr);
+  const result = runNode(companion, ["result"], { cwd: current.work, env: current.env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Completed by coder-custom/);
+});
+
 test("background jobs can be waited on and retrieved", () => {
   const current = fixture({ FAKE_OPENCODE_BEHAVIOR: "slow" });
   const id = backgroundRun(current);

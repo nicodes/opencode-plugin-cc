@@ -79,6 +79,8 @@ It parses OpenCode's NDJSON events, records the session ID, and stores bounded w
 
 `--resume` continues only the latest tracked session for the same agent name, command kind, read-only mode, workspace, and Claude session. A read-only run never resumes a write-capable or review session, even when they use the same agent.
 
+Resume requires the Claude session context installed by the plugin lifecycle hook. Direct companion invocations without that context must start fresh. `/opencode:result` without a job ID likewise defaults to the latest finished job from the current Claude session; pass an explicit ID to retrieve another known workspace job.
+
 Reviews collect staged, unstaged, untracked, or branch-diff context with direct Git process arguments and attach it through `opencode run --file`. The plugin does not replace your reviewer's prompt or output format.
 
 `/opencode:run --read-only` and every `/opencode:review` use OpenCode's `--pure` flag, which disables external OpenCode plugins. The selected agent's actual tool and permission policy still comes from OpenCode. The companion fingerprints Git state before and after these runs and fails loudly if tracked, staged, untracked, or committed content changes. This check is detection, not a sandbox; configure agents used for read-only work accordingly.
