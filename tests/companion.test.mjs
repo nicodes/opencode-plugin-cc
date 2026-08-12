@@ -54,7 +54,11 @@ test("run invokes any selected agent and resumes only matching safety mode", () 
 
   const wrongMode = runNode(companion, ["run", "--agent", "coder-custom", "--read-only", "--resume", "continue"], { cwd: current.work, env: current.env });
   assert.notEqual(wrongMode.status, 0);
-  assert.match(wrongMode.stderr, /No completed read-only session/);
+  assert.match(wrongMode.stderr, /No completed read-only run session/);
+
+  const wrongAgent = runNode(companion, ["run", "--agent", "explorer-custom", "--resume", "continue"], { cwd: current.work, env: current.env });
+  assert.notEqual(wrongAgent.status, 0);
+  assert.match(wrongAgent.stderr, /agent "explorer-custom"/);
 
   const resumed = runNode(companion, ["run", "--agent", "coder-custom", "--resume", "continue"], { cwd: current.work, env: current.env });
   assert.equal(resumed.status, 0, resumed.stderr);
@@ -109,6 +113,27 @@ test("review removes sensitive context after an OpenCode error", () => {
   const invocation = readFakeState(current.fake.stateFile).invocations[0];
   assert.equal(fs.existsSync(invocation.files[0]), false);
   assert.equal(listJobs(current.work, current.env)[0].temporaryDirectory, null);
+});
+
+test("read-only runs never resume review sessions for the same agent", () => {
+  const current = fixture();
+  initializeRepository(current.work);
+  fs.writeFileSync(path.join(current.work, "app.js"), "export const value = 2;\n");
+  const review = runNode(companion, ["review", "--agent", "reviewer-custom", "--scope", "working-tree"], { cwd: current.work, env: current.env });
+  assert.equal(review.status, 0, review.stderr);
+  const resumed = runNode(companion, ["run", "--agent", "reviewer-custom", "--read-only", "--resume", "continue"], { cwd: current.work, env: current.env });
+  assert.notEqual(resumed.status, 0);
+  assert.match(resumed.stderr, /No completed read-only run session/);
+});
+
+test("resume ignores sessions created by a different Claude session", () => {
+  const current = fixture();
+  const first = runNode(companion, ["run", "--agent", "coder-custom", "task"], { cwd: current.work, env: current.env });
+  assert.equal(first.status, 0, first.stderr);
+  const otherSessionEnv = { ...current.env, OPENCODE_COMPANION_SESSION_ID: "another-claude-session" };
+  const resumed = runNode(companion, ["run", "--agent", "coder-custom", "--resume", "continue"], { cwd: current.work, env: otherSessionEnv });
+  assert.notEqual(resumed.status, 0);
+  assert.match(resumed.stderr, /No completed run session/);
 });
 
 test("background jobs can be waited on and retrieved", () => {

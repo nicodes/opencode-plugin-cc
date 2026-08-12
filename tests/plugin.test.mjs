@@ -33,4 +33,6 @@ test("generic skills select OpenCode agents at runtime", () => {
     assert.doesNotMatch(content, /^model:/m);
     assert.doesNotMatch(content, /^tools:/m);
   }
+  const run = fs.readFileSync(path.join(root, "plugins/opencode/skills/run/SKILL.md"), "utf8");
+  assert.match(run, /Add `--read-only` by default for research/);
 });
