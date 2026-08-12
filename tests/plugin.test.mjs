@@ -18,15 +18,18 @@ test("version metadata stays synchronized", () => {
 });
 
 test("plugin exposes seven skills and no Claude subagents", () => {
-  const skills = fs.readdirSync(path.join(root, "plugins/opencode/skills")).sort();
-  assert.deepEqual(skills, ["cancel", "coder", "explorer", "result", "reviewer", "setup", "status"]);
+  const skills = fs.readdirSync(path.join(root, "plugins/opencode/skills"))
+    .filter((skill) => fs.existsSync(path.join(root, "plugins/opencode/skills", skill, "SKILL.md")))
+    .sort();
+  assert.deepEqual(skills, ["agents", "cancel", "result", "review", "run", "setup", "status"]);
   assert.equal(fs.existsSync(path.join(root, "plugins/opencode/agents")), false);
 });
 
-test("role skills delegate through the companion rather than defining OpenCode agents", () => {
-  for (const role of ["coder", "explorer", "reviewer"]) {
-    const content = fs.readFileSync(path.join(root, "plugins/opencode/skills", role, "SKILL.md"), "utf8");
+test("generic skills select OpenCode agents at runtime", () => {
+  for (const skill of ["run", "review"]) {
+    const content = fs.readFileSync(path.join(root, "plugins/opencode/skills", skill, "SKILL.md"), "utf8");
     assert.match(content, /opencode-companion\.mjs/);
+    assert.match(content, /--agent <name>/);
     assert.doesNotMatch(content, /^model:/m);
     assert.doesNotMatch(content, /^tools:/m);
   }

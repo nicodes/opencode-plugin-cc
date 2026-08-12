@@ -6,15 +6,13 @@ import test from "node:test";
 
 import { captureRepositoryFingerprint, collectReviewContext, resolveReviewTarget } from "../plugins/opencode/scripts/lib/git.mjs";
 import { getProcessIdentity, terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
-import { getConfig, listJobs, saveConfig, writeJob } from "../plugins/opencode/scripts/lib/state.mjs";
+import { listJobs, writeJob } from "../plugins/opencode/scripts/lib/state.mjs";
 import { initializeRepository, makeTempDir } from "./helpers.mjs";
 
-test("state stores workspace-specific config and independent job records", () => {
+test("state stores workspace-specific independent job records", () => {
   const workspace = makeTempDir();
   const pluginData = makeTempDir();
   const env = { ...process.env, CLAUDE_PLUGIN_DATA: pluginData };
-  saveConfig(workspace, { roles: { coder: "mine" } }, env);
-  assert.equal(getConfig(workspace, env).roles.coder, "mine");
   writeJob(workspace, { id: "job-1", createdAt: "2026-01-01T00:00:00Z" }, env);
   writeJob(workspace, { id: "job-2", createdAt: "2026-01-02T00:00:00Z" }, env);
   assert.deepEqual(listJobs(workspace, env).map((job) => job.id), ["job-2", "job-1"]);

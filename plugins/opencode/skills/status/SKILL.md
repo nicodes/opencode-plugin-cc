@@ -1,6 +1,6 @@
 ---
 name: status
-description: Show active and recent OpenCode companion jobs for the current workspace or wait for a specific job.
+description: Show active and recent jobs for arbitrary OpenCode agents in the current workspace or wait for a specific job.
 argument-hint: "[job-id] [--wait] [--timeout-ms <ms>] [--all]"
 allowed-tools: Bash(node:*)
 ---
