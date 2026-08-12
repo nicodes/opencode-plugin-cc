@@ -572,8 +572,11 @@ function handleResult(argv) {
   reconcileStaleJobs(cwd);
   const reference = positionals[0] ?? null;
   const currentSession = sessionId();
+  if (!reference && !currentSession) {
+    throw new Error("Result lookup without a job id requires Claude session context. Pass an explicit job id.");
+  }
   const job = selectJob(cwd, reference, (candidate) =>
-    !ACTIVE_STATUSES.has(candidate.status) && (reference || !currentSession || candidate.claudeSessionId === currentSession)
+    !ACTIVE_STATUSES.has(candidate.status) && (reference || candidate.claudeSessionId === currentSession)
   );
   if (!job) {
     throw new Error("No finished OpenCode job was found.");
