@@ -59,25 +59,18 @@ export function listOpenCodeAgents(cwd, env = process.env) {
   return parseAgentList(result.stdout);
 }
 
-export function validateRoleAssignments(agents, roles) {
-  const byName = new Map(agents.map((agent) => [agent.name, agent]));
-  const errors = [];
-  for (const role of ["coder", "explorer", "reviewer"]) {
-    const name = roles[role];
-    if (!name) {
-      errors.push(`${role} is not assigned`);
-      continue;
-    }
-    const agent = byName.get(name);
-    if (!agent) {
-      errors.push(`${role} references unknown agent "${name}"`);
-      continue;
-    }
-    if (!agent.runnable) {
-      errors.push(`${role} agent "${name}" uses mode subagent; opencode run --agent requires primary or all`);
-    }
+export function validateAgentSelection(agents, name) {
+  if (!name?.trim()) {
+    throw new Error("Pass --agent <name>. Run /opencode:agents to list directly runnable agents.");
   }
-  return errors;
+  const agent = agents.find((candidate) => candidate.name === name);
+  if (!agent) {
+    throw new Error(`OpenCode agent "${name}" was not found. Run /opencode:agents to refresh the list.`);
+  }
+  if (!agent.runnable) {
+    throw new Error(`OpenCode agent "${name}" uses mode subagent; opencode run --agent requires primary or all.`);
+  }
+  return agent;
 }
 
 function describeTool(part) {

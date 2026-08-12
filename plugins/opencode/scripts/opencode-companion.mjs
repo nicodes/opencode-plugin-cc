@@ -19,17 +19,15 @@ import {
   getOpenCodeAvailability,
   listOpenCodeAgents,
   runOpenCode,
-  validateRoleAssignments
+  validateAgentSelection
 } from "./lib/opencode.mjs";
 import { getProcessIdentity, terminateProcessTree } from "./lib/process.mjs";
 import {
   appendJobLog,
   generateJobId,
-  getConfig,
   listJobs,
   readJob,
   resolveJobLog,
-  saveConfig,
   updateJob,
   writeJob
 } from "./lib/state.mjs";
@@ -39,15 +37,14 @@ import { removeReviewTemporaryDirectory } from "./lib/temporary.mjs";
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
-const ROLES = new Set(["coder", "explorer", "reviewer"]);
 
 function usage() {
   return [
     "Usage:",
     "  opencode-companion.mjs setup [--json]",
-    "  opencode-companion.mjs configure --coder <agent> --explorer <agent> --reviewer <agent> [--json]",
-    "  opencode-companion.mjs task --role <coder|explorer> [--background] [--resume|--fresh] [--model <id>] [--variant <name>] <prompt>",
-    "  opencode-companion.mjs review [--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <id>] [--variant <name>] [focus]",
+    "  opencode-companion.mjs agents [--json]",
+    "  opencode-companion.mjs run --agent <name> [--read-only] [--background] [--resume|--fresh] [--model <id>] [--variant <name>] <prompt>",
+    "  opencode-companion.mjs review --agent <name> [--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <id>] [--variant <name>] [focus]",
     "  opencode-companion.mjs status [job-id] [--wait] [--all] [--json]",
     "  opencode-companion.mjs result [job-id] [--json]",
     "  opencode-companion.mjs cancel [job-id] [--json]"
@@ -88,7 +85,6 @@ function sessionId() {
 
 function setupReport(cwd) {
   const availability = getOpenCodeAvailability(cwd);
-  const config = getConfig(cwd);
   if (!availability.available) {
     return {
       ready: false,
@@ -96,8 +92,7 @@ function setupReport(cwd) {
       auth: { ready: false, configuredProviders: false, detail: "Skipped because OpenCode is unavailable." },
       agents: [],
       runnableAgents: [],
-      config,
-      assignmentErrors: ["OpenCode is unavailable."]
+      errors: ["OpenCode is unavailable."]
     };
   }
   const auth = getOpenCodeAuth(cwd);
@@ -108,34 +103,28 @@ function setupReport(cwd) {
   } catch (error) {
     agentError = error instanceof Error ? error.message : String(error);
   }
-  const assignmentErrors = agentError ? [agentError] : validateRoleAssignments(agents, config.roles ?? {});
+  const runnableAgents = agents.filter((agent) => agent.runnable);
+  const errors = agentError ? [agentError] : runnableAgents.length === 0 ? ["No primary or all-mode OpenCode agents were found."] : [];
   return {
-    ready: availability.available && auth.ready && assignmentErrors.length === 0,
+    ready: availability.available && auth.ready && errors.length === 0,
     opencode: availability,
     auth,
     agents,
-    runnableAgents: agents.filter((agent) => agent.runnable),
-    config,
-    assignmentErrors
+    runnableAgents,
+    errors
   };
 }
 
 function renderSetup(report) {
-  const assignments = ["coder", "explorer", "reviewer"]
-    .map((role) => `${role}: ${report.config.roles?.[role] ?? "not assigned"}`)
-    .join("\n");
   const available = report.runnableAgents.map((agent) => `${agent.name} (${agent.mode})`).join("\n") || "none";
   return [
     `OpenCode: ${report.opencode.available ? report.opencode.detail : "not installed"}`,
     `Authentication: ${report.auth.configuredProviders ? "credentials-file provider detected" : report.auth.detail}`,
     "",
-    "Role assignments:",
-    assignments,
-    "",
     "Runnable agents:",
     available,
     "",
-    report.ready ? "OpenCode Companion is ready." : `Setup required: ${report.assignmentErrors.join("; ")}`
+    report.ready ? "OpenCode Companion is ready." : `Setup required: ${report.errors.join("; ")}`
   ].join("\n");
 }
 
@@ -145,51 +134,34 @@ function handleSetup(argv) {
   output(report, renderSetup(report), options.json);
 }
 
-function handleConfigure(argv) {
-  const { options } = commandInput(argv, {
-    valueOptions: ["cwd", "coder", "explorer", "reviewer"],
-    booleanOptions: ["json"]
-  });
+function handleAgents(argv) {
+  const { options } = commandInput(argv, { valueOptions: ["cwd"], booleanOptions: ["json"] });
   const cwd = cwdFrom(options);
-  const roles = { coder: options.coder, explorer: options.explorer, reviewer: options.reviewer };
   const agents = listOpenCodeAgents(cwd);
-  const errors = validateRoleAssignments(agents, roles);
-  if (errors.length > 0) {
-    throw new Error(`Invalid role assignments: ${errors.join("; ")}`);
-  }
-  const config = saveConfig(cwd, { version: 1, roles });
-  const payload = { ready: true, config, agents: agents.filter((agent) => agent.runnable) };
-  output(payload, `Saved OpenCode role assignments.\ncoder: ${roles.coder}\nexplorer: ${roles.explorer}\nreviewer: ${roles.reviewer}`, options.json);
+  const payload = {
+    agents,
+    runnableAgents: agents.filter((agent) => agent.runnable)
+  };
+  const rendered = agents.map((agent) => `${agent.name} (${agent.mode})${agent.runnable ? "" : " - not directly runnable"}`).join("\n") || "No OpenCode agents found.";
+  output(payload, rendered, options.json);
 }
 
-function configuredAgent(cwd, role) {
-  if (!ROLES.has(role)) {
-    throw new Error(`Unknown role "${role}".`);
-  }
-  const config = getConfig(cwd);
-  const name = config.roles?.[role];
-  if (!name) {
-    throw new Error(`No OpenCode agent is assigned to ${role}. Run /opencode:setup.`);
-  }
-  const errors = validateRoleAssignments(listOpenCodeAgents(cwd), { coder: role === "coder" ? name : config.roles.coder, explorer: role === "explorer" ? name : config.roles.explorer, reviewer: role === "reviewer" ? name : config.roles.reviewer })
-    .filter((error) => error.startsWith(role));
-  if (errors.length > 0) {
-    throw new Error(`${errors[0]}. Run /opencode:setup to update the mapping.`);
-  }
-  return name;
+function requestedAgent(cwd, name) {
+  return validateAgentSelection(listOpenCodeAgents(cwd), name).name;
 }
 
-function latestRoleSession(cwd, role, excludeId = null) {
+function latestAgentSession(cwd, agent, readOnly, excludeId = null) {
   const currentSession = sessionId();
   const candidate = listJobs(cwd).find((job) =>
     job.id !== excludeId &&
-    job.role === role &&
+    job.agent === agent &&
+    Boolean(job.readOnly) === readOnly &&
     job.openCodeSessionId &&
     !ACTIVE_STATUSES.has(job.status) &&
     (!currentSession || job.claudeSessionId === currentSession)
   );
   if (!candidate) {
-    throw new Error(`No completed ${role} session is available to resume in this workspace.`);
+    throw new Error(`No completed ${readOnly ? "read-only " : ""}session for agent "${agent}" is available to resume in this workspace.`);
   }
   return candidate.openCodeSessionId;
 }
@@ -240,13 +212,13 @@ function reconcileStaleJobs(cwd) {
   }
 }
 
-function renderExecution(role, result, changed, verificationError) {
+function renderExecution(label, result, changed, verificationError) {
   const parts = [];
   if (verificationError) {
-    parts.push(`WARNING: The ${role} run completed, but the Git repository could not be verified afterward: ${verificationError}`);
+    parts.push(`WARNING: The ${label} run completed, but the Git repository could not be verified afterward: ${verificationError}`);
   }
   if (changed) {
-    parts.push(`WARNING: The ${role} run changed the Git repository despite being treated as read-only.`);
+    parts.push(`WARNING: The ${label} run changed the Git repository despite being treated as read-only.`);
   }
   if (result.finalMessage) {
     parts.push(result.finalMessage);
@@ -262,17 +234,16 @@ function renderExecution(role, result, changed, verificationError) {
 }
 
 async function executeRequest(cwd, jobId, request, foreground) {
-  const role = request.role;
-  const agent = configuredAgent(cwd, role);
-  const resumeSessionId = request.resume ? latestRoleSession(cwd, role, jobId) : null;
-  const readOnly = role === "explorer" || role === "reviewer";
+  const agent = requestedAgent(cwd, request.agent);
+  const readOnly = Boolean(request.readOnly || request.kind === "review");
+  const resumeSessionId = request.resume ? latestAgentSession(cwd, agent, readOnly, jobId) : null;
   const verifyRepository = readOnly && isGitRepository(cwd);
   const before = verifyRepository ? captureRepositoryFingerprint(cwd) : null;
   let temporaryDirectory = null;
   let files = [];
   let prompt = request.prompt;
 
-  if (role === "reviewer") {
+  if (request.kind === "review") {
     const target = resolveReviewTarget(cwd, { base: request.base, scope: request.scope });
     const context = collectReviewContext(target);
     temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-review-"));
@@ -318,20 +289,22 @@ async function executeRequest(cwd, jobId, request, foreground) {
   }
   const changed = Boolean(before && after && before !== after);
   const status = changed || verificationError ? 1 : result.status;
-  const rendered = renderExecution(role, result, changed, verificationError);
+  const label = request.kind === "review" ? `review with agent "${agent}"` : `agent "${agent}"`;
+  const rendered = renderExecution(label, result, changed, verificationError);
   return {
     status,
     rendered,
-    summary: changed ? `${role} violated the read-only repository contract.` : shorten(result.finalMessage || result.classification?.detail),
+    summary: changed ? `${label} violated the read-only repository contract.` : shorten(result.finalMessage || result.classification?.detail),
     openCodeSessionId: result.sessionId,
     payload: {
-      role,
       agent,
+      kind: request.kind,
+      readOnly,
       status,
       changedRepository: changed,
       openCodeSessionId: result.sessionId,
       classification: changed
-        ? { kind: "read-only-violation", detail: `${role} changed the Git repository.` }
+        ? { kind: "read-only-violation", detail: `${label} changed the Git repository.` }
         : verificationError
           ? { kind: "repository-verification-failed", detail: verificationError }
           : result.classification,
@@ -344,14 +317,15 @@ async function executeRequest(cwd, jobId, request, foreground) {
 
 function createJob(cwd, request, background) {
   const timestamp = now();
-  const id = generateJobId(request.role);
+  const id = generateJobId(request.kind === "review" ? "review" : "run");
   const job = {
     id,
-    role: request.role,
-    kind: request.role === "reviewer" ? "review" : "task",
+    agent: request.agent,
+    kind: request.kind,
+    readOnly: Boolean(request.readOnly || request.kind === "review"),
     status: "queued",
     phase: "queued",
-    summary: shorten(request.prompt || `${request.role} request`),
+    summary: shorten(request.prompt || `${request.kind} request for ${request.agent}`),
     workspaceRoot: resolveWorkspaceRoot(cwd),
     background,
     claudeSessionId: sessionId(),
@@ -362,7 +336,7 @@ function createJob(cwd, request, background) {
     request
   };
   writeJob(cwd, job);
-  appendJobLog(cwd, id, `Queued ${request.role} job.`);
+  appendJobLog(cwd, id, `Queued ${request.kind} job for agent ${request.agent}.`);
   return job;
 }
 
@@ -432,12 +406,12 @@ function spawnWorker(cwd, jobId) {
 }
 
 async function launch(cwd, request, background, json) {
-  configuredAgent(cwd, request.role);
+  requestedAgent(cwd, request.agent);
   const job = createJob(cwd, request, background);
   if (background) {
     spawnWorker(cwd, job.id);
-    const payload = { jobId: job.id, status: "queued", role: job.role, summary: job.summary };
-    output(payload, `${request.role} started as ${job.id}. Check /opencode:status ${job.id}.`, json);
+    const payload = { jobId: job.id, status: "queued", agent: job.agent, kind: job.kind, readOnly: job.readOnly, summary: job.summary };
+    output(payload, `OpenCode agent "${request.agent}" started as ${job.id}. Check /opencode:status ${job.id}.`, json);
     return;
   }
   const execution = await runTracked(cwd, job, true);
@@ -447,14 +421,11 @@ async function launch(cwd, request, background, json) {
   }
 }
 
-async function handleTask(argv) {
+async function handleRun(argv) {
   const { options, positionals } = commandInput(argv, {
-    valueOptions: ["cwd", "role", "model", "variant"],
-    booleanOptions: ["background", "resume", "fresh", "json"]
+    valueOptions: ["cwd", "agent", "model", "variant"],
+    booleanOptions: ["background", "resume", "fresh", "read-only", "json"]
   });
-  if (!ROLES.has(options.role) || options.role === "reviewer") {
-    throw new Error("task --role must be coder or explorer.");
-  }
   if (options.resume && options.fresh) {
     throw new Error("Choose either --resume or --fresh.");
   }
@@ -463,7 +434,9 @@ async function handleTask(argv) {
     throw new Error("Provide a task or research prompt.");
   }
   await launch(cwdFrom(options), {
-    role: options.role,
+    kind: "run",
+    agent: options.agent,
+    readOnly: Boolean(options["read-only"]),
     prompt,
     resume: Boolean(options.resume),
     model: options.model ?? null,
@@ -473,11 +446,13 @@ async function handleTask(argv) {
 
 async function handleReview(argv) {
   const { options, positionals } = commandInput(argv, {
-    valueOptions: ["cwd", "base", "scope", "model", "variant"],
+    valueOptions: ["cwd", "agent", "base", "scope", "model", "variant"],
     booleanOptions: ["background", "json"]
   });
   await launch(cwdFrom(options), {
-    role: "reviewer",
+    kind: "review",
+    agent: options.agent,
+    readOnly: true,
     prompt: positionals.join(" ").trim(),
     base: options.base ?? null,
     scope: options.scope ?? "auto",
@@ -541,8 +516,8 @@ function renderStatus(jobs) {
   if (jobs.length === 0) {
     return "No OpenCode jobs found for this workspace.";
   }
-  const rows = jobs.map((job) => `| ${job.id} | ${job.role} | ${job.status} | ${job.phase ?? "-"} | ${duration(job)} | ${String(job.summary ?? "").replace(/\|/g, "\\|")} |`);
-  return ["| Job | Role | Status | Phase | Time | Summary |", "|---|---|---|---|---|---|", ...rows].join("\n");
+  const rows = jobs.map((job) => `| ${job.id} | ${job.agent} | ${job.kind}${job.readOnly ? " (read-only)" : ""} | ${job.status} | ${job.phase ?? "-"} | ${duration(job)} | ${String(job.summary ?? "").replace(/\|/g, "\\|")} |`);
+  return ["| Job | Agent | Kind | Status | Phase | Time | Summary |", "|---|---|---|---|---|---|---|", ...rows].join("\n");
 }
 
 async function handleStatus(argv) {
@@ -626,11 +601,11 @@ async function main() {
     case "setup":
       handleSetup(argv);
       return;
-    case "configure":
-      handleConfigure(argv);
+    case "agents":
+      handleAgents(argv);
       return;
-    case "task":
-      await handleTask(argv);
+    case "run":
+      await handleRun(argv);
       return;
     case "review":
       await handleReview(argv);

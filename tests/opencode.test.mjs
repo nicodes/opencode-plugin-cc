@@ -6,7 +6,7 @@ import {
   createJsonEventParser,
   parseAgentList,
   runOpenCode,
-  validateRoleAssignments
+  validateAgentSelection
 } from "../plugins/opencode/scripts/lib/opencode.mjs";
 import { fakeEnvironment, installFakeOpenCode, readFakeState } from "./fake-opencode-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
@@ -20,12 +20,12 @@ test("parseAgentList identifies directly runnable agents", () => {
   ]);
 });
 
-test("validateRoleAssignments rejects missing, unknown, and subagent assignments", () => {
+test("validateAgentSelection accepts any runnable agent and rejects invalid selections", () => {
   const agents = parseAgentList("writer (primary)\nchild (subagent)");
-  const errors = validateRoleAssignments(agents, { coder: "writer", explorer: "child", reviewer: "missing" });
-  assert.equal(errors.length, 2);
-  assert.match(errors[0], /mode subagent/);
-  assert.match(errors[1], /unknown agent/);
+  assert.equal(validateAgentSelection(agents, "writer").name, "writer");
+  assert.throws(() => validateAgentSelection(agents, "child"), /mode subagent/);
+  assert.throws(() => validateAgentSelection(agents, "missing"), /was not found/);
+  assert.throws(() => validateAgentSelection(agents, ""), /--agent/);
 });
 
 test("buildOpenCodeArgs selects a configured agent without injecting agent config", () => {

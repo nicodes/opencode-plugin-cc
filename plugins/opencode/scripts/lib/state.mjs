@@ -25,10 +25,6 @@ export function resolveStateDir(cwd, env = process.env) {
   return path.join(root, `${slug}-${hash}`);
 }
 
-export function resolveConfigFile(cwd, env = process.env) {
-  return path.join(resolveStateDir(cwd, env), "config.json");
-}
-
 export function resolveJobsDir(cwd, env = process.env) {
   return path.join(resolveStateDir(cwd, env), "jobs");
 }
@@ -55,16 +51,6 @@ function readJson(file, fallback = null) {
   } catch {
     return fallback;
   }
-}
-
-export function getConfig(cwd, env = process.env) {
-  return readJson(resolveConfigFile(cwd, env), { version: 1, roles: {} });
-}
-
-export function saveConfig(cwd, config, env = process.env) {
-  const next = { version: 1, roles: {}, ...config };
-  writeJsonAtomic(resolveConfigFile(cwd, env), next);
-  return next;
 }
 
 export function generateJobId(kind = "job") {
