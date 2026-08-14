@@ -151,7 +151,7 @@ function handleAgents(argv) {
 }
 
 function requestedAgent(cwd, name) {
-  return validateAgentSelection(listOpenCodeAgents(cwd), name).name;
+  return validateAgentSelection(listOpenCodeAgents(cwd), name, cwd).name;
 }
 
 function latestAgentSession(cwd, agent, kind, readOnly, excludeId = null) {
