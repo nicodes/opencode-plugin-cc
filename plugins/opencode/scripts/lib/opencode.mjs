@@ -59,13 +59,26 @@ export function listOpenCodeAgents(cwd, env = process.env) {
   return parseAgentList(result.stdout);
 }
 
-export function validateAgentSelection(agents, name) {
+export function validateAgentSelection(agents, name, cwd = null) {
   if (!name?.trim()) {
     throw new Error("Pass --agent <name>. Run /opencode:agents to list directly runnable agents.");
   }
   const agent = agents.find((candidate) => candidate.name === name);
   if (!agent) {
-    throw new Error(`OpenCode agent "${name}" was not found. Run /opencode:agents to refresh the list.`);
+    // Agents resolve from .opencode/agents/ relative to the working directory, so the
+    // usual cause is invoking from a nested repository rather than the directory that
+    // defines them. Name the directory searched and what did resolve, so the working
+    // directory is visible as a cause rather than reading as a registration failure.
+    const searched = cwd ? ` in ${cwd}` : "";
+    const available = agents.length
+      ? `Resolved there: ${agents.map((candidate) => candidate.name).join(", ")}.`
+      : "No agents resolved from that directory at all.";
+    throw new Error(
+      `OpenCode agent "${name}" was not found${searched}. ${available} ` +
+        "Agents resolve from .opencode/agents/ relative to the working directory. " +
+        "If this workspace holds several repositories, run from the directory that " +
+        "defines the agents or pass --cwd. Run /opencode:agents to list what resolves."
+    );
   }
   if (!agent.runnable) {
     throw new Error(`OpenCode agent "${name}" uses mode subagent; opencode run --agent requires primary or all.`);
