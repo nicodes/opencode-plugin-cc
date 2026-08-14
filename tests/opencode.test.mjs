@@ -28,6 +28,23 @@ test("validateAgentSelection accepts any runnable agent and rejects invalid sele
   assert.throws(() => validateAgentSelection(agents, ""), /--agent/);
 });
 
+test("validateAgentSelection surfaces the searched directory and what resolved there", () => {
+  const agents = parseAgentList("writer (primary)\nchild (subagent)");
+  assert.throws(() => validateAgentSelection(agents, "missing", "/work/nested-repo"), (error) => {
+    assert.match(error.message, /was not found in \/work\/nested-repo/);
+    assert.match(error.message, /Resolved there: writer, child\./);
+    assert.match(error.message, /\.opencode\/agents\/ relative to the working directory/);
+    return true;
+  });
+});
+
+test("validateAgentSelection says so when nothing resolved from the directory", () => {
+  assert.throws(() => validateAgentSelection([], "coder", "/work/nested-repo"), (error) => {
+    assert.match(error.message, /No agents resolved from that directory at all\./);
+    return true;
+  });
+});
+
 test("buildOpenCodeArgs selects a configured agent without injecting agent config", () => {
   assert.deepEqual(buildOpenCodeArgs({
     cwd: "/work",

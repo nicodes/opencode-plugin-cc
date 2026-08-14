@@ -67,6 +67,21 @@ The plugin never writes to either location and does not maintain a second agent 
 
 `--model` and `--variant` are optional per-run overrides. Without them, OpenCode and the selected agent choose the model configuration.
 
+## Working directory
+
+Three things resolve from the working directory, and they resolve independently:
+
+| Resolved from cwd | Consequence |
+|---|---|
+| Agent definitions | OpenCode looks for `.opencode/agents/` relative to cwd. It does not search upward past the directory you invoke from. |
+| Job state | Jobs are recorded per workspace, so `status` and `result` only see jobs started against that same workspace. |
+| Review scope | `review` resolves the diff with Git against cwd. |
+
+In a single-repository project these coincide and there is nothing to think about. In a workspace holding several independent clones under one parent directory they can diverge, with two consequences worth knowing before you hit them:
+
+- **`--agent` fails from a nested repository.** If `.opencode/agents/` lives in the parent directory, a nested clone resolves no agents and dispatch fails. `status` and `result` are scoped the same way, so a job started from the parent is invisible from the child and `result <id>` reports no finished job. Run companion commands from the directory that defines the agents, or pass `--cwd`/`-C`.
+- **`review` cannot scope a nested repository.** `--cwd` drives both agent resolution and diff resolution, so no single value satisfies both when the agents and the diff live in different directories: the parent resolves the reviewer but has no diff, and the child has the diff but resolves no agents. Until these are separable, review a nested repository with `run --agent <reviewer> --read-only` from the directory that defines the agents, pinning the scope inside the prompt with explicit `gh pr diff` and `git -C <repo> diff <base>...<head>` commands.
+
 ## Behavior
 
 The companion runs one-shot processes using:
