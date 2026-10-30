@@ -1,0 +1,30 @@
+[
+  {
+    "source": "plugins/opencode/skills/agents/SKILL.prompt",
+    "target": "plugins/opencode/skills/agents/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/cancel/SKILL.prompt",
+    "target": "plugins/opencode/skills/cancel/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/result/SKILL.prompt",
+    "target": "plugins/opencode/skills/result/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/review/SKILL.prompt",
+    "target": "plugins/opencode/skills/review/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/run/SKILL.prompt",
+    "target": "plugins/opencode/skills/run/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/setup/SKILL.prompt",
+    "target": "plugins/opencode/skills/setup/SKILL.md"
+  },
+  {
+    "source": "plugins/opencode/skills/status/SKILL.prompt",
+    "target": "plugins/opencode/skills/status/SKILL.md"
+  }
+]
