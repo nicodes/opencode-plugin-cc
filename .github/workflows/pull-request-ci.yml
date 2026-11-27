@@ -2,6 +2,7 @@ name: Pull Request CI
 
 on:
   pull_request:
+  workflow_dispatch: {}
   push:
     branches: [main]
 
@@ -32,3 +33,25 @@ jobs:
           node-version: 22
       - run: npm install --global @anthropic-ai/claude-code@2.1.227
       - run: claude plugin validate plugins/opencode --strict
+      - name: Check out integration verification tools
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nicodes/tools
+          ref: 6a651cc9c59c0cec127f987bcbac0074352e88b5
+          path: .artifacts/dependency-tools
+          persist-credentials: false
+      - name: Record tested integration identity
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: /usr/bin/python3 -I -B .artifacts/dependency-tools/helpers/integration-identity.py
+      - name: Upload integration identity
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fleet-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/fleet-integration.json
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true
