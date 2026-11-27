@@ -1,0 +1,9 @@
+version = 1
+mode = "merge-on-green"
+ci_workflow = "pull-request-ci.yml"
+required_checks = ["test (20)", "test (22)", "validate-plugin"]
+max_group_size = 10
+managed_dependencies = []
+sensitive_dependencies = []
+dispatch_workflow = "pull-request-ci.yml"
+integration_job = "validate-plugin"
